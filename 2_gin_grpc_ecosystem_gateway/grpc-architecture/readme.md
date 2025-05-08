@@ -46,15 +46,6 @@ go run main.go
 
 ### test request
 
-simple use grpc-ecosystem
-```shell
-curl http://localhost:8080/user/123
-
-curl -X POST http://localhost:8080/user \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Alice", "email": "alice@example.com"}'
-```
-
 use gin + grpc-ecosystem
 ```shell
 curl http://localhost:8080/health

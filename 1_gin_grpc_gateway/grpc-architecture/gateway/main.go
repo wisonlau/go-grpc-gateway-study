@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"log"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
@@ -13,7 +16,10 @@ import (
 	pb "gateway/proto"
 )
 
-var userClient pb.UserServiceClient
+var (
+	userClient pb.UserServiceClient
+	grpcServer *grpc.Server
+)
 
 func init() {
 	conn, err := grpc.Dial("localhost:50052", grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -23,15 +29,48 @@ func init() {
 	userClient = pb.NewUserServiceClient(conn)
 }
 
-func main() {
+type gatewayServer struct {
+	pb.UnimplementedUserServiceServer
+}
+
+func (s *gatewayServer) GetUser(ctx context.Context, req *pb.GetUserRequest) (*pb.GetUserResponse, error) {
+	log.Printf("[gRPC] Received GetUser request for user ID: %s", req.UserId)
+	return userClient.GetUser(ctx, req)
+}
+
+func (s *gatewayServer) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb.CreateUserResponse, error) {
+	log.Printf("[gRPC] Received CreateUser request: Name=%s, Email=%s", req.Name, req.Email)
+	return userClient.CreateUser(ctx, req)
+}
+
+func startGRPCServer(wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	lis, err := net.Listen("tcp", ":8081")
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
+
+	grpcServer = grpc.NewServer()
+	pb.RegisterUserServiceServer(grpcServer, &gatewayServer{})
+
+	log.Printf("gRPC server listening at %v", lis.Addr())
+	if err := grpcServer.Serve(lis); err != nil {
+		log.Fatalf("failed to serve gRPC: %v", err)
+	}
+}
+
+func startHTTPServer(wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	router := gin.Default()
 
 	router.GET("/user/:id", getUserHandler)
 	router.POST("/user", createUserHandler)
 
-	log.Println("API Gateway started on :8080")
+	log.Println("HTTP server started on :8080")
 	if err := http.ListenAndServe(":8080", router); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+		log.Fatalf("failed to serve HTTP: %v", err)
 	}
 }
 
@@ -75,4 +114,17 @@ func prepareMetadata(header http.Header) metadata.MD {
 		md.Set(strings.ToLower(k), v...)
 	}
 	return md
+}
+
+func main() {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// 启动 gRPC 服务
+	go startGRPCServer(&wg)
+
+	// 启动 HTTP 服务
+	go startHTTPServer(&wg)
+
+	wg.Wait()
 }

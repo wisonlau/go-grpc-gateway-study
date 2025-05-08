@@ -63,10 +63,26 @@ func startGRPCServer(wg *sync.WaitGroup) {
 func startHTTPServer(wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	// Create Gin router
 	router := gin.Default()
+	// Add health check endpoint
+	router.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	router.GET("/user/:id", getUserHandler)
 	router.POST("/user", createUserHandler)
+
+	// Route /orders/* requests to Gin
+	orderGroup := router.Group("/orders")
+	{
+		orderGroup.GET("", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"data": "order list"})
+		})
+		orderGroup.GET("/:id", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"order": c.Param("id")})
+		})
+	}
 
 	log.Println("HTTP server started on :8080")
 	if err := http.ListenAndServe(":8080", router); err != nil {

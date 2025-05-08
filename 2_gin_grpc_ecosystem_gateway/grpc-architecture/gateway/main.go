@@ -108,7 +108,7 @@ func main() {
 	apiPrefix := "/api"
 	apiGroup := router.Group(apiPrefix)
 	apiGroup.Any("/*any", gin.WrapH(newPrefixHandler(mux, apiPrefix)))
-	// Route /api/* requests to Gin
+	// Route /orders/* requests to Gin
 	orderGroup := router.Group("/orders")
 	{
 		orderGroup.GET("", func(c *gin.Context) {

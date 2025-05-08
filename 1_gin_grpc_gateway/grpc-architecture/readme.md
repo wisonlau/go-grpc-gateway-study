@@ -45,6 +45,10 @@ curl -X POST http://localhost:8080/user \
   -H "Content-Type: application/json" \
   -d '{"name": "Alice", "email": "alice@example.com"}'
 
+curl http://localhost:8080/health
+
+curl http://localhost:8080/orders
+
 grpcurl -plaintext -proto ./proto/user.proto -d '{"user_id": "123"}' localhost:8081 user.UserService/GetUser
 grpcurl -plaintext -proto ./proto/user.proto -d '{"name": "Alice", "email": "alice@example.com"}' localhost:8081 user.UserService/CreateUser
 ```

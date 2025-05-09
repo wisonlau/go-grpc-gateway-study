@@ -28,8 +28,22 @@ func init() {
 	}()
 }
 
+func asyncLog(v ...interface{}) {
+	msg := fmt.Sprintln(v...)
+	select {
+	case logCh <- msg:
+	default:
+		// Downgrade processing: immediate output (to avoid memory leaks)
+		log.Println(append([]interface{}{"!LOG_OVERFLOW!"}, v...)...)
+	}
+}
+
+func asyncLogf(format string, v ...interface{}) {
+	asyncLog(fmt.Sprintf(format, v...))
+}
+
 func (s *userServer) GetUser(ctx context.Context, req *pb.GetUserRequest) (*pb.GetUserResponse, error) {
-	logCh <- fmt.Sprintf("Received GetUser request for ID: %s", req.UserId)
+	asyncLogf("Received GetUser request for ID: %s", req.UserId)
 	return &pb.GetUserResponse{
 		Id:    req.UserId,
 		Name:  "John Doe",
@@ -38,7 +52,7 @@ func (s *userServer) GetUser(ctx context.Context, req *pb.GetUserRequest) (*pb.G
 }
 
 func (s *userServer) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb.CreateUserResponse, error) {
-	logCh <- fmt.Sprintf("Received CreateUser request: %s, %s", req.Name, req.Email)
+	asyncLogf("Received CreateUser request: %s, %s", req.Name, req.Email)
 	return &pb.CreateUserResponse{
 		Id:    "123",
 		Name:  req.Name,
@@ -60,9 +74,9 @@ func main() {
 		grpc.UnaryInterceptor(func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 			start := time.Now()
 			defer func() {
-				logCh <- fmt.Sprintf("[gRPC] %s | Duration: %v", info.FullMethod, time.Since(start))
+				asyncLogf("[gRPC] %s | Duration: %v", info.FullMethod, time.Since(start))
 			}()
-			logCh <- fmt.Sprintf("gRPC call: %s", info.FullMethod)
+			asyncLogf("gRPC call: %s", info.FullMethod)
 			return handler(ctx, req)
 		}),
 	)
@@ -77,9 +91,9 @@ func main() {
 		close(logCh)
 	}()
 
-	logCh <- fmt.Sprintf("User gRPC service started on :50052")
+	asyncLog("User gRPC service started on :50052")
 	if err := s.Serve(lis); err != nil {
-		logCh <- fmt.Sprintf("failed to serve: %v", err)
+		asyncLogf("failed to serve: %v", err)
 	}
 	wg.Wait()
 }

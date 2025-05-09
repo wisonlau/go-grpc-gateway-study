@@ -28,13 +28,37 @@ type gatewayServer struct {
 	userClient pb.UserServiceClient
 }
 
+var logCh = make(chan string, 10000)
+
+func init() {
+	go func() {
+		for msg := range logCh {
+			log.Print(msg)
+		}
+	}()
+}
+
+func asyncLog(v ...interface{}) {
+	msg := fmt.Sprintln(v...)
+	select {
+	case logCh <- msg:
+	default:
+		// Downgrade processing: immediate output (to avoid memory leaks)
+		log.Println(append([]interface{}{"!LOG_OVERFLOW!"}, v...)...)
+	}
+}
+
+func asyncLogf(format string, v ...interface{}) {
+	asyncLog(fmt.Sprintf(format, v...))
+}
+
 func (s *gatewayServer) GetUser(ctx context.Context, req *pb.GetUserRequest) (*pb.GetUserResponse, error) {
-	log.Printf("[Gateway] Processing gRPC request GetUser: %v", req)
+	asyncLogf("[Gateway] Processing gRPC request GetUser: %v", req)
 	return s.userClient.GetUser(ctx, req)
 }
 
 func (s *gatewayServer) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb.CreateUserResponse, error) {
-	log.Printf("[Gateway] Processing gRPC request CreateUser: %v", req)
+	asyncLogf("[Gateway] Processing gRPC request CreateUser: %v", req)
 	return s.userClient.CreateUser(ctx, req)
 }
 
@@ -45,14 +69,14 @@ func loggingInterceptor(ctx context.Context, method string, req, reply interface
 
 	if err != nil {
 		if s, ok := status.FromError(err); ok {
-			log.Printf("gRPC call failed | Method: %s | Duration: %v | Code: %d | Message: %s",
+			asyncLogf("gRPC call failed | Method: %s | Duration: %v | Code: %d | Message: %s",
 				method, duration, s.Code(), s.Message())
 		} else {
-			log.Printf("gRPC call failed | Method: %s | Duration: %v | Error: %v",
+			asyncLogf("gRPC call failed | Method: %s | Duration: %v | Error: %v",
 				method, duration, err)
 		}
 	} else {
-		log.Printf("gRPC call succeeded | Method: %s | Duration: %v", method, duration)
+		asyncLogf("gRPC call succeeded | Method: %s | Duration: %v", method, duration)
 	}
 	return err
 }
@@ -68,7 +92,7 @@ func startGRPCServer(ctx context.Context, client pb.UserServiceClient) error {
 			func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 				start := time.Now()
 				defer func() {
-					log.Printf("gRPC server processing completed | Method: %s | Duration: %v", info.FullMethod, time.Since(start))
+					asyncLogf("gRPC server processing completed | Method: %s | Duration: %v", info.FullMethod, time.Since(start))
 				}()
 				return handler(ctx, req)
 			},
@@ -78,11 +102,11 @@ func startGRPCServer(ctx context.Context, client pb.UserServiceClient) error {
 
 	go func() {
 		<-ctx.Done()
-		log.Println("Gracefully shutting down gRPC server...")
+		asyncLog("Gracefully shutting down gRPC server...")
 		s.GracefulStop()
 	}()
 
-	log.Println("gRPC server started on :8081")
+	asyncLog("gRPC server started on :8081")
 	return s.Serve(lis)
 }
 
@@ -100,7 +124,7 @@ func newPrefixHandler(gwMux *runtime.ServeMux, prefix string) http.Handler {
 		rw := &responseWriter{w, 0}
 		gwMux.ServeHTTP(rw, r)
 
-		log.Printf("[%s] Upstream latency: %v | Status: %d | Path: %s",
+		asyncLogf("[%s] Upstream latency: %v | Status: %d | Path: %s",
 			time.Now().Format("2006-01-02 15:04:05"),
 			time.Since(start),
 			rw.status,
@@ -146,11 +170,11 @@ func startHTTPServer(ctx context.Context, gwMux *runtime.ServeMux) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("HTTP server shutdown error: %v", err)
+			asyncLogf("HTTP server shutdown error: %v", err)
 		}
 	}()
 
-	log.Println("HTTP server started on :8080")
+	asyncLog("HTTP server started on :8080")
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("HTTP server error: %w", err)
 	}
@@ -160,11 +184,21 @@ func startHTTPServer(ctx context.Context, gwMux *runtime.ServeMux) error {
 func main() {
 	// Initialize context
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	defer func() {
+		close(logCh)
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
 
 	// Connect to user service
 	userConn, err := grpc.DialContext(ctx, "localhost:50052",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultServiceConfig(`{
+        "loadBalancingPolicy": "round_robin",
+        "healthCheckConfig": {
+            "serviceName": "user.UserService"
+        }
+    	}`),
 		grpc.WithUnaryInterceptor(loggingInterceptor),
 	)
 	if err != nil {
@@ -205,10 +239,10 @@ func main() {
 
 	select {
 	case sig := <-sigChan:
-		log.Printf("Received termination signal: %v", sig)
+		asyncLogf("Received termination signal: %v", sig)
 		cancel()
 	case err := <-errChan:
-		log.Printf("Service error: %v", err)
+		asyncLogf("Service error: %v", err)
 		cancel()
 	}
 
@@ -221,8 +255,8 @@ func main() {
 
 	select {
 	case <-done:
-		log.Println("All services stopped safely")
+		asyncLog("All services stopped safely")
 	case <-time.After(10 * time.Second):
-		log.Println("Warning: Service shutdown timeout")
+		asyncLog("Warning: Service shutdown timeout")
 	}
 }

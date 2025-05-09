@@ -86,11 +86,26 @@ func startGRPCServer(ctx context.Context, client pb.UserServiceClient) error {
 	return s.Serve(lis)
 }
 
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
 func newPrefixHandler(gwMux *runtime.ServeMux, prefix string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
 		// remove the specified prefix
 		r.URL.Path = strings.TrimPrefix(r.URL.Path, prefix)
-		gwMux.ServeHTTP(w, r)
+		rw := &responseWriter{w, 0}
+		gwMux.ServeHTTP(rw, r)
+
+		log.Printf("[%s] Upstream latency: %v | Status: %d | Path: %s",
+			time.Now().Format("2006-01-02 15:04:05"),
+			time.Since(start),
+			rw.status,
+			r.URL.Path,
+		)
 	})
 }
 
